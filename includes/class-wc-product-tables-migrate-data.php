@@ -8,8 +8,6 @@
 
 /**
  * Class WC_Product_Tables_Migrate_Data
- *
- * @todo migrate _variation_description meta to post_content
  */
 class WC_Product_Tables_Migrate_Data {
 
@@ -45,16 +43,22 @@ class WC_Product_Tables_Migrate_Data {
 		// List of post meta keys that will be migrated to different tables created by this plugin.
 		'custom'  => array(
 			'_downloadable_files',
-			'_download_limit',
-			'_download_expiry',
 			'_children',
 			'_upsell_ids',
 			'_crosssell_ids',
 			'_product_image_gallery',
 			'_product_attributes',
 			'_default_attributes',
+			'_variation_description',
 		),
 	);
+
+	/**
+	 * Whether or not the migration is currently running.
+	 *
+	 * @var bool
+	 */
+	public static $migrating = false;
 
 	/**
 	 * Main function that runs the whole migration.
@@ -64,7 +68,7 @@ class WC_Product_Tables_Migrate_Data {
 	public static function migrate( $clean_old_data = false ) {
 		global $wpdb;
 
-		define( 'WC_PRODUCT_TABLES_MIGRATING', true );
+		self::$migrating = true;
 
 		$products = self::get_products();
 
@@ -78,28 +82,28 @@ class WC_Product_Tables_Migrate_Data {
 			// Migrate download files.
 			$downloadable_files = isset( $metas['_downloadable_files'] ) ? maybe_unserialize( $metas['_downloadable_files'][0] ) : array();
 
-			foreach ( $downloadable_files as $download_key => $downloadable_file ) {
-				$new_download    = array(
-					'product_id' => $product->ID,
-					'name'       => $downloadable_file['name'],
-					'file'       => $downloadable_file['file'],
-					'limit'      => isset( $metas['_download_limit'] ) ? $metas['_download_limit'][0] : null,
-					'expires'    => isset( $metas['_download_expiry'] ) ? $metas['_download_expiry'][0] : null,
-					'priority'   => $priority,
-				);
-				$new_download_id = self::insert( 'wc_product_downloads', $new_download );
+			if ( ! empty( $downloadable_files ) ) {
+				foreach ( $downloadable_files as $download_key => $downloadable_file ) {
+					$new_download    = array(
+						'product_id' => $product->ID,
+						'name'       => $downloadable_file['name'],
+						'file'       => $downloadable_file['file'],
+						'priority'   => $priority,
+					);
+					$new_download_id = self::insert( 'wc_product_downloads', $new_download );
 
-				$wpdb->update(
-					$wpdb->prefix . 'woocommerce_downloadable_product_permissions',
-					array(
-						'download_id' => $new_download_id,
-					),
-					array(
-						'download_id' => $download_key,
-					)
-				);
+					$wpdb->update(
+						$wpdb->prefix . 'woocommerce_downloadable_product_permissions',
+						array(
+							'download_id' => $new_download_id,
+						),
+						array(
+							'download_id' => $download_key,
+						)
+					);
 
-				$priority++;
+					$priority++;
+				}
 			}
 
 			// Migrate grouped products.
@@ -140,10 +144,20 @@ class WC_Product_Tables_Migrate_Data {
 
 			self::migrate_attributes( $product );
 
+			// Migrate variation description.
+			if ( 'product_variation' === $product->post_type ) {
+				wp_update_post( array(
+					'ID'           => $product->ID,
+					'post_content' => get_post_meta( $product->ID, '_variation_description', true ),
+				) );
+			}
+
 			if ( $clean_old_data ) {
 				self::clean_old_data( $product->ID );
 			}
 		}
+
+		self::$migrating = false;
 	}
 
 	/**
@@ -192,30 +206,53 @@ class WC_Product_Tables_Migrate_Data {
 		);
 
 		foreach ( self::$meta_keys['product'] as $new_field_name => $meta_key ) {
-			if ( '_price' === $meta_key ) {
-				if ( isset( $metas['_price'] ) ) {
-					// Sort from low to high picking lowest.
-					rsort( $metas['_price'] );
-					$meta_value = $metas['_price'][0];
-				} else {
-					$meta_value = null;
-				}
-			} elseif ( '_sale_price' === $meta_key ) {
-				// replace empty strings (used to represent products not on sale) with NULL as the type of the field
-				// sale_price is double and an empty string is not a valid value.
-				$meta_value = ( isset( $metas['_sale_price'] ) && '' !== $metas['_sale_price'][0] ) ? $metas['_sale_price'][0] : null;
-			} elseif ( '_sale_price_dates_from' === $meta_key ) {
-				$meta_value = date( 'Y-m-d H:i:s', $metas['_sale_price_dates_from'][0] );
-			} elseif ( '_sale_price_dates_to' === $meta_key ) {
-				$meta_value = date( 'Y-m-d H:i:s', $metas['_sale_price_dates_to'][0] );
-			} elseif ( '_virtual' === $meta_key ) {
-				$meta_value = 'yes' === $metas['_virtual'][0] ? 1 : 0;
-			} elseif ( '_downloadable' === $meta_key ) {
-				$meta_value = 'yes' === $metas['_downloadable'][0] ? 1 : 0;
-			} else {
-				$meta_value = isset( $metas[ $meta_key ] ) ? $metas[ $meta_key ][0] : null;
+			switch ( $meta_key ) {
+				case '_price':
+					if ( isset( $metas['_price'] ) ) {
+						// Sort from low to high picking lowest.
+						rsort( $metas['_price'] );
+						$meta_value = $metas['_price'][0];
+					} else {
+						$meta_value = null;
+					}
+					break;
+				case '_sale_price':
+					// replace empty strings (used to represent products not on sale) with NULL as the type of the field
+					// sale_price is double and an empty string is not a valid value.
+					$meta_value = ( isset( $metas['_sale_price'] ) && '' !== $metas['_sale_price'][0] ) ? $metas['_sale_price'][0] : null;
+					break;
+				case '_sale_price_dates_from':
+					if ( ! empty( $metas['_sale_price_dates_from'] ) ) {
+						$meta_value = date( 'Y-m-d H:i:s', (int) $metas['_sale_price_dates_from'][0] );
+					} else {
+						$meta_vaule = null;
+					}
+					break;
+				case '_sale_price_dates_to':
+					if ( ! empty( $metas['_sale_price_dates_to'] ) ) {
+						$meta_value = date( 'Y-m-d H:i:s', (int) $metas['_sale_price_dates_to'][0] );
+					} else {
+						$meta_vaule = null;
+					}
+					break;
+				case '_virtual':
+					if ( isset( $metas['_virtual'] ) ) {
+						$meta_value = 'yes' === $metas['_virtual'][0] ? 1 : 0;
+					} else {
+						$meta_value = 0;
+					}
+					break;
+				case '_downloadable':
+					if ( isset( $metas['_downloadable'] ) ) {
+						$meta_value = 'yes' === $metas['_downloadable'][0] ? 1 : 0;
+					} else {
+						$meta_value = 0;
+					}
+					break;
+				default:
+					$meta_value = isset( $metas[ $meta_key ] ) ? $metas[ $meta_key ][0] : null;
+					break;
 			}
-
 			$new_data[ $new_field_name ] = $meta_value;
 		}
 
@@ -359,9 +396,11 @@ class WC_Product_Tables_Migrate_Data {
 				'priority'             => $count,
 				'is_default'           => 0,
 			);
-			foreach ( $default_attributes as $default_attr ) {
-				if ( isset( $default_attr[ $attribute_name ] ) && $default_attr[ $attribute_name ] === $term->slug ) {
-					$term_data['is_default'] = 1;
+			if ( ! empty( $default_attributes ) ) {
+				foreach ( $default_attributes as $default_attr ) {
+					if ( isset( $default_attr[ $attribute_name ] ) && $default_attr[ $attribute_name ] === $term->slug ) {
+						$term_data['is_default'] = 1;
+					}
 				}
 			}
 			self::insert( 'wc_product_attribute_values', $term_data );
@@ -389,9 +428,11 @@ class WC_Product_Tables_Migrate_Data {
 				'priority'             => $count,
 				'is_default'           => 0,
 			);
-			foreach ( $default_attributes as $default_attr ) {
-				if ( isset( $default_attr[ $attribute_name ] ) && trim( $attr_value ) === $default_attr[ $attribute_name ] ) {
-					$attr_value_data['is_default'] = 1;
+			if ( ! empty( $default_attributes ) ) {
+				foreach ( $default_attributes as $default_attr ) {
+					if ( isset( $default_attr[ $attribute_name ] ) && trim( $attr_value ) === $default_attr[ $attribute_name ] ) {
+						$attr_value_data['is_default'] = 1;
+					}
 				}
 			}
 			self::insert( 'wc_product_attribute_values', $attr_value_data );

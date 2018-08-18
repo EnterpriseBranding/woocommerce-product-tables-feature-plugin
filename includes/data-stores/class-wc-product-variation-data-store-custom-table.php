@@ -46,8 +46,6 @@ class WC_Product_Variation_Data_Store_Custom_Table extends WC_Product_Data_Store
 			return;
 		}
 
-		$id = $product->get_id();
-
 		$product->set_props(
 			array(
 				'name'            => $post_object->post_title,
@@ -67,7 +65,7 @@ class WC_Product_Variation_Data_Store_Custom_Table extends WC_Product_Data_Store
 			$product->set_parent_id( 0 );
 		}
 
-		$this->read_attributes( $product ); // @todo This replaces wc_get_product_variation_attributes so deprecate it.
+		$this->read_attributes( $product );
 		$this->read_downloads( $product );
 		$this->read_product_data( $product );
 		$this->read_extra_data( $product );
@@ -80,7 +78,7 @@ class WC_Product_Variation_Data_Store_Custom_Table extends WC_Product_Data_Store
 		if ( $post_object->post_title !== $new_title ) {
 			$product->set_name( $new_title );
 			$GLOBALS['wpdb']->update( $GLOBALS['wpdb']->posts, array( 'post_title' => $new_title ), array( 'ID' => $product->get_id() ) );
-			clean_post_cache( $product->get_id() ); // @todo does this need changing?
+			clean_post_cache( $product->get_id() );
 		}
 
 		// Set object_read true once all data is read.
@@ -326,19 +324,25 @@ class WC_Product_Variation_Data_Store_Custom_Table extends WC_Product_Data_Store
 	*/
 
 	/**
-	 * Read attributes - in this case, the attribute values (name value pairs). @todo Do we need special code like wc_get_product_variation_attributes to keep this valid?
+	 * Read attributes - in this case, the attribute values (name value pairs).
 	 *
 	 * @param WC_Product $product Product Object.
 	 */
 	public function read_attributes( &$product ) {
 		global $wpdb;
 
-		$product_attributes = $wpdb->get_results(
-			$wpdb->prepare(
-				"SELECT value, product_attribute_id FROM {$wpdb->prefix}wc_product_variation_attribute_values WHERE product_id = %d",
-				$product->get_id()
-			)
-		); // WPCS: db call ok, cache ok.
+		$product_attributes = wp_cache_get( 'woocommerce_product_variation_attribute_values_' . $product->get_id(), 'product' );
+
+		if ( false === $product_attributes ) {
+			$product_attributes = $wpdb->get_results(
+				$wpdb->prepare(
+					"SELECT value, product_attribute_id FROM {$wpdb->prefix}wc_product_variation_attribute_values WHERE product_id = %d",
+					$product->get_id()
+				)
+			); // WPCS: db call ok, cache ok.
+
+			wp_cache_set( 'woocommerce_product_variation_attribute_values_' . $product->get_id(), $product_attributes, 'product' );
+		}
 
 		if ( ! empty( $product_attributes ) ) {
 			$attributes = array();
@@ -362,11 +366,11 @@ class WC_Product_Variation_Data_Store_Custom_Table extends WC_Product_Data_Store
 		global $wpdb;
 
 		$data    = array(
-			'type' => $product->get_type( 'edit' ),
+			'type' => $product->get_type(),
 		);
 		$changes = $product->get_changes();
 		$insert  = false;
-		$row     = $this->get_product_row_from_db( $product->get_id( 'edit' ) );
+		$row     = $this->get_product_row_from_db( $product->get_id() );
 
 		if ( ! $row ) {
 			$insert = true;
@@ -400,7 +404,7 @@ class WC_Product_Variation_Data_Store_Custom_Table extends WC_Product_Data_Store
 			'date_on_sale_to',
 		);
 
-		// @todo: Adapt getters to return null in core.
+		// Values which can be null in the database.
 		$allow_null = array(
 			'height',
 			'length',
@@ -414,6 +418,11 @@ class WC_Product_Variation_Data_Store_Custom_Table extends WC_Product_Data_Store
 			'date_on_sale_to',
 			'average_rating',
 		);
+
+		if ( array_key_exists( 'manage_stock', $changes ) && ! $product->get_stock_quantity( 'edit' ) ) {
+			$data['stock_quantity'] = 0;
+			$this->updated_props[] = 'stock_quantity';
+		}
 
 		foreach ( $columns as $column ) {
 			if ( $insert || array_key_exists( $column, $changes ) ) {
@@ -429,14 +438,14 @@ class WC_Product_Variation_Data_Store_Custom_Table extends WC_Product_Data_Store
 		}
 
 		if ( $insert ) {
-			$data['product_id'] = $product->get_id( 'edit' );
+			$data['product_id'] = $product->get_id();
 			$wpdb->insert( "{$wpdb->prefix}wc_products", $data ); // WPCS: db call ok, cache ok.
 		} elseif ( ! empty( $data ) ) {
 			$wpdb->update(
 				"{$wpdb->prefix}wc_products",
 				$data,
 				array(
-					'product_id' => $product->get_id( 'edit' ),
+					'product_id' => $product->get_id(),
 				)
 			); // WPCS: db call ok, cache ok.
 		}
@@ -568,7 +577,7 @@ class WC_Product_Variation_Data_Store_Custom_Table extends WC_Product_Data_Store
 
 		$attributes = wp_cache_get( 'woocommerce_parent_product_attribute_names_' . $product->get_id(), 'product' );
 
-		if ( empty( $attributes ) ) {
+		if ( false === $attributes ) {
 			$attributes = wp_list_pluck(
 				$wpdb->get_results(
 					$wpdb->prepare(
@@ -612,9 +621,6 @@ class WC_Product_Variation_Data_Store_Custom_Table extends WC_Product_Data_Store
 				foreach ( $attributes as $attribute_key => $attribute_value ) {
 					/**
 					 * Variation objects store name(slug)=>value pairs, so do a lookup on the attribute ID from the name.
-					 *
-					 * @todo when this moves to core I suggest we refactor the slug=>value pair storage and use IDs. This may
-					 * be a breaking change. For now we can workaround it with lookups.
 					 */
 					$product_attribute_id = $this->get_product_attribute_id_from_slug( $product, $attribute_key );
 
@@ -630,7 +636,7 @@ class WC_Product_Variation_Data_Store_Custom_Table extends WC_Product_Data_Store
 							),
 							array(
 								'product_attribute_id' => $product_attribute_id,
-								'product_id'           => $product->get_id( 'edit' ),
+								'product_id'           => $product->get_id(),
 							)
 						); // WPCS: db call ok, cache ok.
 					} else {
@@ -639,7 +645,7 @@ class WC_Product_Variation_Data_Store_Custom_Table extends WC_Product_Data_Store
 							array(
 								'value'                => $attribute_value,
 								'product_attribute_id' => $product_attribute_id,
-								'product_id'           => $product->get_id( 'edit' ),
+								'product_id'           => $product->get_id(),
 							)
 						); // WPCS: db call ok, cache ok.
 					}
@@ -654,5 +660,16 @@ class WC_Product_Variation_Data_Store_Custom_Table extends WC_Product_Data_Store
 				}
 			}
 		}
+	}
+
+	/**
+	 * Clear product variations specific caches and calls parent::clear_caches() to clear the remaining product caches.
+	 *
+	 * @param WC_Product $product The product object.
+	 */
+	protected function clear_caches( &$product ) {
+		wp_cache_delete( 'woocommerce_product_children_stock_status_' . $product->get_parent_id(), 'product' );
+		wp_cache_delete( 'woocommerce_product_variation_attribute_values_' . $product->get_id(), 'product' );
+		parent::clear_caches( $product );
 	}
 }

@@ -11,7 +11,7 @@
 /**
  * WCPT_Unit_Tests_Bootstrap
  */
-class WCPT_Unit_Tests_Bootstrap {
+class WCPT_Disabled_BW_Compat_Unit_Tests_Bootstrap {
 
 	/**
 	 * Instance of this class.
@@ -48,6 +48,7 @@ class WCPT_Unit_Tests_Bootstrap {
 	 * Load Plugin.
 	 */
 	public function load_plugin() {
+		define( 'WC_PRODUCT_TABLES_DISABLE_BW_COMPAT', true );
 		require_once dirname( dirname( __FILE__ ) ) . '/woocommerce-product-tables-feature-plugin.php';
 	}
 
@@ -80,4 +81,4 @@ class WCPT_Unit_Tests_Bootstrap {
 	}
 }
 
-WCPT_Unit_Tests_Bootstrap::instance();
+WCPT_Disabled_BW_Compat_Unit_Tests_Bootstrap::instance();

@@ -57,13 +57,13 @@ class WC_Product_Variable_Data_Store_Custom_Table extends WC_Product_Data_Store_
 
 		if ( empty( $children ) || ! is_array( $children ) || ! isset( $children['all'] ) || ! isset( $children['visible'] ) || $force_read ) {
 			$all_args = array(
-				'parent'      => $product->get_id(),
-				'type'        => 'variation',
-				'orderby'     => 'menu_order',
-				'order'       => 'ASC',
-				'limit'       => -1,
-				'return'      => 'ids',
-				'status'      => array( 'publish', 'private' ),
+				'parent'  => $product->get_id(),
+				'type'    => 'variation',
+				'orderby' => 'menu_order',
+				'order'   => 'ASC',
+				'limit'   => -1,
+				'return'  => 'ids',
+				'status'  => array( 'publish', 'private' ),
 			);
 			$all_args = apply_filters( 'woocommerce_variable_children_args', $all_args, $product, false );
 
@@ -169,7 +169,7 @@ class WC_Product_Variable_Data_Store_Custom_Table extends WC_Product_Data_Store_
 	}
 
 	/**
-	 * Get an array of all sale and regular prices from all variations. This is used for example when displaying the price range at variable product level or seeing if the variable product is on sale. @todo
+	 * Get an array of all sale and regular prices from all variations. This is used for example when displaying the price range at variable product level or seeing if the variable product is on sale.
 	 *
 	 * Can be filtered by plugins which modify costs, but otherwise will include the raw meta costs unlike get_price() which runs costs through the woocommerce_get_price filter.
 	 * This is to ensure modified prices are not cached, unless intended.
@@ -404,26 +404,43 @@ class WC_Product_Variable_Data_Store_Custom_Table extends WC_Product_Data_Store_
 	 * @return boolean
 	 */
 	public function child_is_in_stock( $product ) {
+		return $this->child_has_stock_status( $product, 'instock' );
+	}
+
+	/**
+	 * Does a child have a stock status?
+	 *
+	 * @param WC_Product $product Product object.
+	 * @param string     $status 'instock', 'outofstock', or 'onbackorder'.
+	 * @return boolean
+	 */
+	public function child_has_stock_status( $product, $status ) {
 		global $wpdb;
 
-		$child_is_in_stock = wp_cache_get( 'woocommerce_product_child_is_in_stock_' . $product->get_id(), 'product' );
+		$children_stock_status = wp_cache_get( 'woocommerce_product_children_stock_status_' . $product->get_id(), 'product' );
 
-		if ( false === $child_is_in_stock ) {
-			$child_is_in_stock = null !== $wpdb->get_var(
+		if ( false === $children_stock_status ) {
+			$children_stock_status = array();
+		}
+
+		if ( ! isset( $children_stock_status[ $status ] ) ) {
+			$children_stock_status[ $status ] = (bool) $wpdb->get_var(
 				$wpdb->prepare(
 					"SELECT product_id
 					FROM {$wpdb->prefix}wc_products as products
 					LEFT JOIN {$wpdb->posts} as posts ON products.product_id = posts.ID
 					WHERE posts.post_parent = %d
-					AND products.stock_status = 'instock'",
-					$product->get_id()
+					AND products.stock_status = %s
+					LIMIT 1",
+					$product->get_id(),
+					$status
 				)
-			) ? 1 : 0; // WPCS: db call ok, cache ok.
+			);
 
-			wp_cache_set( 'woocommerce_product_child_is_in_stock_' . $product->get_id(), $child_is_in_stock, 'product' );
+			wp_cache_set( 'woocommerce_product_children_stock_status_' . $product->get_id(), $children_stock_status, 'product' );
 		}
 
-		return (bool) $child_is_in_stock;
+		return $children_stock_status[ $status ];
 	}
 
 	/**
@@ -465,17 +482,23 @@ class WC_Product_Variable_Data_Store_Custom_Table extends WC_Product_Data_Store_
 		if ( $product->get_manage_stock() ) {
 			$status   = $product->get_stock_status();
 			$children = $product->get_children();
-			$wpdb->query(
-				$wpdb->prepare(
-					"UPDATE {$wpdb->prefix}wc_products
-					SET stock_status = %s
-					WHERE product_id IN (" . implode( ',', array_map( 'absint', $children ) ) . ')', // phpcs:ignore WordPress.WP.PreparedSQL.NotPrepared,
-					$status
-				)
-			);
-			$children = $this->read_children( $product, true );
-			$product->set_children( $children['all'] );
-			$product->set_visible_children( $children['visible'] );
+
+			if ( ! empty( $children ) ) {
+				$changed = $wpdb->query(
+					$wpdb->prepare(
+						"UPDATE {$wpdb->prefix}wc_products
+						SET stock_status = %s
+						WHERE product_id IN (" . implode( ',', array_map( 'absint', $children ) ) . ')', // phpcs:ignore WordPress.WP.PreparedSQL.NotPrepared,
+						$status
+					)
+				);
+
+				if ( $changed ) {
+					$children = $this->read_children( $product, true );
+					$product->set_children( $children['all'] );
+					$product->set_visible_children( $children['visible'] );
+				}
+			}
 		}
 	}
 
@@ -498,7 +521,7 @@ class WC_Product_Variable_Data_Store_Custom_Table extends WC_Product_Data_Store_
 					SET price = %d
 					WHERE product_id = %d",
 					wc_format_decimal( $min_price ),
-					$product->get_Id()
+					$product->get_id()
 				)
 			);
 		}

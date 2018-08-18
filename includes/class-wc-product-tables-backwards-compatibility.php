@@ -7,8 +7,6 @@
 
 /**
  * Backwards compatibility layer for metadata access.
- *
- * @todo WP_Query meta query support? (IMO no. They should be using CRUD search helpers)
  */
 class WC_Product_Tables_Backwards_Compatibility {
 
@@ -16,6 +14,9 @@ class WC_Product_Tables_Backwards_Compatibility {
 	 * WC_Product_Tables_Backwards_Compatibility constructor.
 	 */
 	public function __construct() {
+		if ( ! apply_filters( 'woocommerce_product_tables_enable_backward_compatibility', true ) || defined( 'WC_PRODUCT_TABLES_DISABLE_BW_COMPAT' ) ) {
+			return;
+		}
 		add_filter( 'get_post_metadata', array( $this, 'get_metadata_from_tables' ), 99, 4 );
 		add_filter( 'add_post_metadata', array( $this, 'add_metadata_to_tables' ), 99, 5 );
 		add_filter( 'update_post_metadata', array( $this, 'update_metadata_in_tables' ), 99, 5 );
@@ -32,14 +33,11 @@ class WC_Product_Tables_Backwards_Compatibility {
 	 * @return string|array
 	 */
 	public function get_metadata_from_tables( $result, $post_id, $meta_key, $single ) {
-		global $wpdb;
-
 		$mapping = $this->get_mapping();
-		if ( ( defined( 'WC_PRODUCT_TABLES_MIGRATING' ) && WC_PRODUCT_TABLES_MIGRATING ) || ! isset( $mapping[ $meta_key ] ) ) {
+		if ( WC_Product_Tables_Migrate_Data::$migrating || ! isset( $mapping[ $meta_key ] ) ) {
 			return $result;
 		}
 
-		$mapped_query       = $mapping[ $meta_key ]['get'];
 		$mapped_func        = $mapping[ $meta_key ]['get']['function'];
 		$args               = $mapping[ $meta_key ]['get']['args'];
 		$args['product_id'] = $post_id;
@@ -65,13 +63,11 @@ class WC_Product_Tables_Backwards_Compatibility {
 	 * @param string     $meta_key   Metadata key.
 	 * @param mixed      $meta_value Metadata value. Must be serializable if non-scalar.
 	 * @param bool       $unique     Whether the same key should not be added.
-	 * @return int|bool
+	 * @return array|bool
 	 */
 	public function add_metadata_to_tables( $result, $post_id, $meta_key, $meta_value, $unique ) {
-		global $wpdb;
-
 		$mapping = $this->get_mapping();
-		if ( ( defined( 'WC_PRODUCT_TABLES_MIGRATING' ) && WC_PRODUCT_TABLES_MIGRATING ) || ! isset( $mapping[ $meta_key ] ) ) {
+		if ( WC_Product_Tables_Migrate_Data::$migrating || ! isset( $mapping[ $meta_key ] ) ) {
 			return $result;
 		}
 
@@ -82,7 +78,6 @@ class WC_Product_Tables_Backwards_Compatibility {
 			}
 		}
 
-		$mapped_query       = $mapping[ $meta_key ]['add'];
 		$mapped_func        = $mapping[ $meta_key ]['add']['function'];
 		$args               = $mapping[ $meta_key ]['add']['args'];
 		$args['product_id'] = $post_id;
@@ -99,19 +94,14 @@ class WC_Product_Tables_Backwards_Compatibility {
 	 * @param string     $meta_key   Metadata key.
 	 * @param mixed      $meta_value Metadata value. Must be serializable if non-scalar.
 	 * @param mixed      $prev_value Previous value to check before removing.
-	 * @return int|bool
+	 * @return array|bool
 	 */
 	public function update_metadata_in_tables( $result, $post_id, $meta_key, $meta_value, $prev_value ) {
-		global $wpdb;
-
 		$mapping = $this->get_mapping();
-		if ( ( defined( 'WC_PRODUCT_TABLES_MIGRATING' ) && WC_PRODUCT_TABLES_MIGRATING ) || ! isset( $mapping[ $meta_key ] ) ) {
+		if ( WC_Product_Tables_Migrate_Data::$migrating || ! isset( $mapping[ $meta_key ] ) ) {
 			return $result;
 		}
 
-		$mapped_query = $mapping[ $meta_key ]['update'];
-
-		$mapped_query       = $mapping[ $meta_key ]['update'];
 		$mapped_func        = $mapping[ $meta_key ]['update']['function'];
 		$args               = $mapping[ $meta_key ]['update']['args'];
 		$args['product_id'] = $post_id;
@@ -129,19 +119,14 @@ class WC_Product_Tables_Backwards_Compatibility {
 	 * @param string     $meta_key   Metadata key.
 	 * @param mixed      $prev_value Metadata value. Must be serializable if non-scalar.
 	 * @param bool       $delete_all Delete all metadata.
-	 * @return int|bool
+	 * @return array|bool
 	 */
 	public function delete_metadata_from_tables( $result, $post_id, $meta_key, $prev_value, $delete_all ) {
-		global $wpdb;
-
 		$mapping = $this->get_mapping();
-		if ( ( defined( 'WC_PRODUCT_TABLES_MIGRATING' ) && WC_PRODUCT_TABLES_MIGRATING ) || ! isset( $mapping[ $meta_key ] ) ) {
+		if ( WC_Product_Tables_Migrate_Data::$migrating || ! isset( $mapping[ $meta_key ] ) ) {
 			return $result;
 		}
 
-		$mapped_query = $mapping[ $meta_key ]['delete'];
-
-		$mapped_query       = $mapping[ $meta_key ]['delete'];
 		$mapped_func        = $mapping[ $meta_key ]['delete']['function'];
 		$args               = $mapping[ $meta_key ]['delete']['args'];
 		$args['product_id'] = $post_id;
@@ -180,15 +165,19 @@ class WC_Product_Tables_Backwards_Compatibility {
 			return array();
 		}
 
-		$data = wp_cache_get( 'woocommerce_product_backwards_compatibility_' . $args['column'] . '_' . $args['product_id'], 'product' );
+		$data = wp_cache_get( 'woocommerce_product_backwards_compatibility_' . $args['product_id'], 'product' );
 
-		if ( empty( $data ) ) {
-			$data = $wpdb->get_col( $wpdb->prepare( 'SELECT `' . esc_sql( $args['column'] ) . "` from {$wpdb->prefix}wc_products WHERE product_id = %d", $args['product_id'] ) ); // WPCS: db call ok.
-
-			wp_cache_set( 'woocommerce_product_backwards_compatibility_' . $args['column'] . '_' . $args['product_id'], $data, 'product' );
+		if ( false === $data ) {
+			$data = array();
 		}
 
-		return $data;
+		if ( empty( $data[ $args['column'] ] ) ) {
+			$data[ $args['column'] ] = $wpdb->get_col( $wpdb->prepare( 'SELECT `' . esc_sql( $args['column'] ) . "` from {$wpdb->prefix}wc_products WHERE product_id = %d", $args['product_id'] ) ); // WPCS: db call ok.
+
+			wp_cache_set( 'woocommerce_product_backwards_compatibility_' . $args['product_id'], $data, 'product' );
+		}
+
+		return $data[ $args['column'] ];
 	}
 
 	/**
@@ -254,7 +243,7 @@ class WC_Product_Tables_Backwards_Compatibility {
 		}
 
 		if ( $update_success ) {
-			wp_cache_delete( 'woocommerce_product_backwards_compatibility_' . $args['column'] . '_' . $args['product_id'], 'product' );
+			wp_cache_delete( 'woocommerce_product_backwards_compatibility_' . $args['product_id'], 'product' );
 			wp_cache_delete( 'woocommerce_product_' . $args['product_id'], 'product' );
 		}
 
@@ -423,17 +412,22 @@ class WC_Product_Tables_Backwards_Compatibility {
 
 		// Support delete all and check for meta value.
 		if ( ! empty( $args['delete_all'] ) ) {
-			$query = "UPDATE {$wpdb->posts} SET post_content = '' WHERE post_type = 'product_variation'";
+			$prev_value = '';
+			$update     = "UPDATE {$wpdb->posts} SET post_content = '' WHERE post_type = 'product_variation'";
+			$current    = "SELECT ID FROM {$wpdb->posts} WHERE post_type = 'product_variation'";
 
 			if ( ! empty( $args['prev_value'] ) ) {
-				$query .= " AND post_content = '" . esc_sql( $args['prev_value'] ) . "'";
+				$prev_value = " AND post_content = '" . esc_sql( $args['prev_value'] ) . "'";
 			}
 
-			$results = (bool) $wpdb->query( $query ); // WPCS: unprepared SQL ok.
+			$id_list = $wpdb->get_results( $current . $prev_value ); // WPCS: unprepared SQL ok.
+			$results = (bool) $wpdb->query( $update . $prev_value ); // WPCS: unprepared SQL ok.
 
 			// Clear post cache if successfully.
 			if ( $results ) {
-				clean_post_cache( $post_ID );
+				foreach ( $id_list as $variation ) {
+					clean_post_cache( $variation->ID );
+				}
 			}
 
 			return $results;
@@ -524,76 +518,6 @@ class WC_Product_Tables_Backwards_Compatibility {
 	}
 
 	/**
-	 * Get from the downloads table.
-	 *
-	 * @param  array $args {
-	 *     Array of arguments.
-	 *
-	 *     @type int    $product_id Product ID.
-	 *     @type string $column     Column to get.
-	 * }
-	 * @return array
-	 */
-	public function get_from_downloads_table( $args ) {
-		global $wpdb;
-
-		$defaults = array(
-			'product_id' => 0,
-			'column'     => '',
-		);
-		$args     = wp_parse_args( $args, $defaults );
-
-		if ( ! $args['product_id'] || ! $args['column'] ) {
-			return array();
-		}
-
-		$data = $wpdb->get_col( $wpdb->prepare( 'SELECT `' . esc_sql( $args['column'] ) . "` from {$wpdb->prefix}wc_product_downloads WHERE product_id = %d", $args['product_id'] ) ); // WPCS: db call ok.
-		return $data;
-	}
-
-	/**
-	 * Update the downloads table.
-	 *
-	 * @param  array $args {
-	 *     Array of arguments.
-	 *
-	 *     @type int    $product_id Product ID.
-	 *     @type string $column     Column to update.
-	 *     @type string $format     Format of column data.
-	 *     @type mixed  $value      New value to put in column.
-	 * }
-	 * @return bool
-	 */
-	public function update_downloads_table( $args ) {
-		global $wpdb;
-
-		$defaults = array(
-			'product_id' => 0,
-			'column'     => '',
-			'format'     => '',
-			'value'      => '',
-		);
-		$args     = wp_parse_args( $args, $defaults );
-
-		if ( ! $args['product_id'] || ! $args['column'] ) {
-			return array();
-		}
-
-		$format = $args['format'] ? array( $args['format'] ) : null;
-
-		return (bool) $wpdb->update(
-			$wpdb->prefix . 'wc_product_downloads',
-			array(
-				$args['column'] => $args['value'],
-			),
-			array(
-				'product_id' => $args['product_id'],
-			),
-			$format
-		); // WPCS: db call ok, cache ok.
-	}
-
-	/**
 	 * Get downloadable files in legacy meta format from downloads table.
 	 *
 	 * @param  array $args {
@@ -618,22 +542,22 @@ class WC_Product_Tables_Backwards_Compatibility {
 		$query_results = wp_cache_get( 'woocommerce_product_backwards_compatibility_downloadable_files_' . $args['product_id'], 'product' );
 
 		if ( empty( $query_results ) ) {
-			$query_results = $wpdb->get_results( $wpdb->prepare( "SELECT `download_id`, `name`, `file` from {$wpdb->prefix}wc_product_downloads WHERE `product_id` = %d", $args['product_id'] ) );
+			$query_results = $wpdb->get_results( $wpdb->prepare( "SELECT `download_id`, `name`, `file` from {$wpdb->prefix}wc_product_downloads WHERE `product_id` = %d ORDER by `priority` ASC", $args['product_id'] ) );
 
 			wp_cache_set( 'woocommerce_product_backwards_compatibility_downloadable_files_' . $args['product_id'], $query_results, 'product' );
 		}
 
 		$mapped_results = array();
 		foreach ( $query_results as $result ) {
-			$mapped_results[ $result['download_id'] ] = array(
-				'id'            => $result['download_id'],
-				'name'          => $result['name'],
-				'file'          => $result['file'],
+			$mapped_results[ $result->download_id ] = array(
+				'id'            => $result->download_id,
+				'name'          => $result->name,
+				'file'          => $result->file,
 				'previous_hash' => '',
 			);
 		}
 
-		return $mapped_results;
+		return array( array( $mapped_results ) );
 	}
 
 	/**
@@ -645,7 +569,7 @@ class WC_Product_Tables_Backwards_Compatibility {
 	 *     @type int    $product_id Product ID.
 	 *     @type array  $value Array of legacy meta format downloads info.
 	 * }
-	 * @return array
+	 * @return bool
 	 */
 	public function update_downloadable_files( $args ) {
 		global $wpdb;
@@ -663,10 +587,10 @@ class WC_Product_Tables_Backwards_Compatibility {
 		$new_values = $args['value'];
 		$new_ids    = array_keys( $new_values );
 
-		$existing_file_data        = $wpdb->get_results( $wpdb->prepare( "SELECT `download_id`, `limit`, `expires` FROM {$wpdb->prefix}wc_product_downloads WHERE `product_id` = %d ORDER BY `priority` ASC", $args['product_id'] ) );  // WPCS: db call ok, cache ok.
+		$existing_file_data        = $wpdb->get_results( $wpdb->prepare( "SELECT `download_id` FROM {$wpdb->prefix}wc_product_downloads WHERE `product_id` = %d ORDER BY `priority` ASC", $args['product_id'] ) ); // WPCS: db call ok, cache ok.
 		$existing_file_data_by_key = array();
 		foreach ( $existing_file_data as $data ) {
-			$existing_file_data_by_key[ $data['download_id'] ] = $data;
+			$existing_file_data_by_key[ $data->download_id ] = $data;
 		}
 		$old_ids = wp_list_pluck( $existing_file_data, 'download_id' );
 		$missing = array_diff( $old_ids, $new_ids );
@@ -691,9 +615,7 @@ class WC_Product_Tables_Backwards_Compatibility {
 				'download_id' => $id,
 				'product_id'  => $args['product_id'],
 				'name'        => isset( $download_info['name'] ) ? $download_info['name'] : '',
-				'url'         => isset( $download_info['file'] ) ? $download_info['file'] : '',
-				'limit'       => isset( $existing_file_data_by_key[ $id ] ) ? $existing_file_data_by_key[ $id ]['limit'] : null,
-				'expires'     => isset( $existing_file_data_by_key[ $id ] ) ? $existing_file_data_by_key[ $id ]['expires'] : null,
+				'file'        => isset( $download_info['file'] ) ? $download_info['file'] : '',
 				'priority'    => $priority,
 			);
 
@@ -710,11 +632,11 @@ class WC_Product_Tables_Backwards_Compatibility {
 				)
 			); // WPCS: db call ok, cache ok.
 
-			++$priority;
+			$priority++;
 		}
 
 		wp_cache_delete( 'woocommerce_product_backwards_compatibility_downloadable_files_' . $args['product_id'], 'product' );
-		wp_cache_delete( 'woocommerce_product_' . $args['product_id'], 'product' );
+		wp_cache_delete( 'woocommerce_product_downloads_' . $args['product_id'], 'product' );
 
 		return true;
 	}
@@ -730,8 +652,6 @@ class WC_Product_Tables_Backwards_Compatibility {
 	 * @return array
 	 */
 	public function get_product_attributes( $args ) {
-		global $wpdb;
-
 		$defaults = array(
 			'product_id' => 0,
 		);
@@ -747,15 +667,15 @@ class WC_Product_Tables_Backwards_Compatibility {
 		}
 
 		$raw_attributes = $product->get_attributes();
-		$attributes = array();
+		$attributes     = array();
 		foreach ( $raw_attributes as $raw_attribute ) {
 			$attribute = array(
-				'name' => $raw_attribute->get_name(),
-				'position' => $raw_attribute->get_position(),
-				'is_visible' => (int) $raw_attribute->get_visible(),
+				'name'         => $raw_attribute->get_name(),
+				'position'     => $raw_attribute->get_position(),
+				'is_visible'   => (int) $raw_attribute->get_visible(),
 				'is_variation' => (int) $raw_attribute->get_variation(),
-				'is_taxonomy' => (int) $raw_attribute->is_taxonomy(),
-				'value' => implode( ' | ', $raw_attribute->get_options() ),
+				'is_taxonomy'  => (int) $raw_attribute->is_taxonomy(),
+				'value'        => implode( ' | ', $raw_attribute->get_options() ),
 			);
 			$attributes[ sanitize_title( $raw_attribute->get_name() ) ] = $attribute;
 		}
@@ -775,8 +695,6 @@ class WC_Product_Tables_Backwards_Compatibility {
 	 * @return bool
 	 */
 	public function update_product_attributes( $args ) {
-		global $wpdb;
-
 		$defaults = array(
 			'product_id' => 0,
 			'value'      => array(),
@@ -825,8 +743,6 @@ class WC_Product_Tables_Backwards_Compatibility {
 	 * @return array
 	 */
 	public function get_product_default_attributes( $args ) {
-		global $wpdb;
-
 		$defaults = array(
 			'product_id' => 0,
 		);
@@ -856,8 +772,6 @@ class WC_Product_Tables_Backwards_Compatibility {
 	 * @return bool
 	 */
 	public function update_product_default_attributes( $args ) {
-		global $wpdb;
-
 		$defaults = array(
 			'product_id' => 0,
 			'value'      => array(),
@@ -1429,36 +1343,6 @@ class WC_Product_Tables_Backwards_Compatibility {
 					),
 				),
 			),
-			'_thumbnail_id'          => array(
-				'get'    => array(
-					'function' => array( $this, 'get_from_product_table' ),
-					'args'     => array(
-						'column' => 'image_id',
-					),
-				),
-				'add'    => array(
-					'function' => array( $this, 'update_in_product_table' ),
-					'args'     => array(
-						'column' => 'image_id',
-						'format' => '%d',
-					),
-				),
-				'update' => array(
-					'function' => array( $this, 'update_in_product_table' ),
-					'args'     => array(
-						'column' => 'image_id',
-						'format' => '%d',
-					),
-				),
-				'delete' => array(
-					'function' => array( $this, 'update_in_product_table' ),
-					'args'     => array(
-						'column' => 'image_id',
-						'format' => '%d',
-						'value'  => 0,
-					),
-				),
-			),
 
 			/**
 			 * In relationship table.
@@ -1573,70 +1457,6 @@ class WC_Product_Tables_Backwards_Compatibility {
 			),
 
 			/**
-			 * In downloads table. @todo Products and data stores are not handling this correctly. Was previously meta.
-			 */
-			'_download_limit'        => array(
-				'get'    => array(
-					'function' => array( $this, 'get_from_downloads_table' ),
-					'args'     => array(
-						'column' => 'limit',
-					),
-				),
-				'add'    => array(
-					'function' => array( $this, 'update_downloads_table' ),
-					'args'     => array(
-						'column' => 'limit',
-						'format' => '%d',
-					),
-				),
-				'update' => array(
-					'function' => array( $this, 'update_downloads_table' ),
-					'args'     => array(
-						'column' => 'limit',
-						'format' => '%d',
-					),
-				),
-				'delete' => array(
-					'function' => array( $this, 'update_downloads_table' ),
-					'args'     => array(
-						'column' => 'limit',
-						'format' => '%d',
-						'value'  => -1,
-					),
-				),
-			),
-			'_download_expiry'       => array(
-				'get'    => array(
-					'function' => array( $this, 'get_from_downloads_table' ),
-					'args'     => array(
-						'column' => 'expires',
-					),
-				),
-				'add'    => array(
-					'function' => array( $this, 'update_downloads_table' ),
-					'args'     => array(
-						'column' => 'expires',
-						'format' => '%d',
-					),
-				),
-				'update' => array(
-					'function' => array( $this, 'update_downloads_table' ),
-					'args'     => array(
-						'column' => 'expires',
-						'format' => '%d',
-					),
-				),
-				'delete' => array(
-					'function' => array( $this, 'update_downloads_table' ),
-					'args'     => array(
-						'column' => 'expires',
-						'format' => '%d',
-						'value'  => -1,
-					),
-				),
-			),
-
-			/**
 			 * Super custom.
 			 */
 			'_downloadable_files'    => array(
@@ -1699,7 +1519,7 @@ class WC_Product_Tables_Backwards_Compatibility {
 					),
 				),
 			),
-			'_product_attributes'          => array(
+			'_product_attributes'    => array(
 				'get'    => array(
 					'function' => array( $this, 'get_product_attributes' ),
 					'args'     => array(),
@@ -1719,7 +1539,7 @@ class WC_Product_Tables_Backwards_Compatibility {
 					),
 				),
 			),
-			'_default_attributes'          => array(
+			'_default_attributes'    => array(
 				'get'    => array(
 					'function' => array( $this, 'get_product_default_attributes' ),
 					'args'     => array(),

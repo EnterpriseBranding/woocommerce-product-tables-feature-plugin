@@ -33,6 +33,8 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 		'_wp_old_slug',
 		'_edit_last',
 		'_edit_lock',
+		'_download_limit',
+		'_download_expiry',
 	);
 
 	/**
@@ -133,11 +135,11 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 		global $wpdb;
 
 		$data    = array(
-			'type' => $product->get_type( 'edit' ),
+			'type' => $product->get_type(),
 		);
 		$changes = $product->get_changes();
 		$insert  = false;
-		$row     = $this->get_product_row_from_db( $product->get_id( 'edit' ) );
+		$row     = $this->get_product_row_from_db( $product->get_id() );
 
 		if ( ! $row ) {
 			$insert = true;
@@ -172,7 +174,7 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 			'date_on_sale_to',
 		);
 
-		// @todo: Adapt getters to return null in core.
+		// Values which can be null in the database.
 		$allow_null = array(
 			'height',
 			'length',
@@ -207,12 +209,12 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 		}
 
 		if ( $insert ) {
-			$data['product_id'] = $product->get_id( 'edit' );
+			$data['product_id'] = $product->get_id();
 			$wpdb->insert( "{$wpdb->prefix}wc_products", $data ); // WPCS: db call ok, cache ok.
 		} elseif ( ! empty( $data ) ) {
 			$wpdb->update(
 				"{$wpdb->prefix}wc_products", $data, array(
-					'product_id' => $product->get_id( 'edit' ),
+					'product_id' => $product->get_id(),
 				)
 			); // WPCS: db call ok, cache ok.
 		}
@@ -236,7 +238,7 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 
 		$data = wp_cache_get( 'woocommerce_product_' . $product_id, 'product' );
 
-		if ( empty( $data ) ) {
+		if ( false === $data ) {
 			$data = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$wpdb->prefix}wc_products WHERE product_id = %d;", $product_id ) ); // WPCS: db call ok.
 
 			wp_cache_set( 'woocommerce_product_' . $product_id, $data, 'product' );
@@ -256,7 +258,7 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 
 		$data = wp_cache_get( 'woocommerce_product_relationships_' . $product_id, 'product' );
 
-		if ( empty( $data ) ) {
+		if ( false === $data ) {
 			$data = $wpdb->get_results( $wpdb->prepare( "SELECT `relationship_id`, `object_id`, `type` FROM {$wpdb->prefix}wc_product_relationships WHERE `product_id` = %d ORDER BY `priority` ASC", $product_id ) ); // WPCS: db call ok.
 
 			wp_cache_set( 'woocommerce_product_relationships_' . $product_id, $data, 'product' );
@@ -276,8 +278,8 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 
 		$data = wp_cache_get( 'woocommerce_product_downloads_' . $product_id, 'product' );
 
-		if ( empty( $data ) ) {
-			$data = $wpdb->get_results( $wpdb->prepare( "SELECT `download_id`, `name`, `file`, `limit`, `expires`, `priority` FROM {$wpdb->prefix}wc_product_downloads WHERE `product_id` = %d ORDER BY `priority` ASC", $product_id ) ); // WPCS: db call ok.
+		if ( false === $data ) {
+			$data = $wpdb->get_results( $wpdb->prepare( "SELECT `download_id`, `name`, `file`, `priority` FROM {$wpdb->prefix}wc_product_downloads WHERE `product_id` = %d ORDER BY `priority` ASC", $product_id ) ); // WPCS: db call ok.
 
 			wp_cache_set( 'woocommerce_product_downloads_' . $product_id, $data, 'product' );
 		}
@@ -315,6 +317,8 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 			'_backorders'        => 'backorders',
 			'_sold_individually' => 'sold_individually',
 			'_purchase_note'     => 'purchase_note',
+			'_download_limit'    => 'download_limit',
+			'_download_expiry'   => 'download_expiry',
 		);
 
 		foreach ( $meta_to_props as $meta_key => $prop ) {
@@ -369,7 +373,6 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 				$product->set_date_created( current_time( 'timestamp', true ) );
 			}
 
-			// Handle manage_stock prop which is changing in this schema. @todo Depreate in core?
 			if ( $product->get_manage_stock( 'edit' ) && ! $product->get_stock_quantity( 'edit' ) ) {
 				$product->set_stock_quantity( 0 );
 			}
@@ -439,8 +442,6 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 			throw new Exception( __( 'Invalid product.', 'woocommerce' ) );
 		}
 
-		$id = $product->get_id();
-
 		$product->set_props(
 			array(
 				'name'              => $post_object->post_title,
@@ -473,7 +474,6 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 		$product->save_meta_data();
 		$changes = $product->get_changes();
 
-		// Handle manage_stock prop which is changing in this schema. @todo Depreate in core?
 		if ( array_key_exists( 'manage_stock', $changes ) && ! $product->get_stock_quantity( 'edit' ) ) {
 			$product->set_stock_quantity( 0 );
 		}
@@ -595,9 +595,12 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 	 * @param WC_Product $product The product object.
 	 */
 	protected function clear_caches( &$product ) {
+		wp_cache_delete( 'woocommerce_product_attribute_values_' . $product->get_id(), 'product' );
 		wp_cache_delete( 'woocommerce_product_' . $product->get_id(), 'product' );
 		wp_cache_delete( 'woocommerce_product_relationships_' . $product->get_id(), 'product' );
 		wp_cache_delete( 'woocommerce_product_downloads_' . $product->get_id(), 'product' );
+		wp_cache_delete( 'woocommerce_product_backwards_compatibility_' . $product->get_id(), 'product' );
+		wp_cache_delete( 'woocommerce_product_attributes_' . $product->get_id(), 'product' );
 		wc_delete_product_transients( $product->get_id() );
 	}
 
@@ -606,11 +609,11 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 	 *
 	 * @since 3.0.0
 	 * @param int $product_id Product ID to query.
-	 * @return string
+	 * @return string|bool
 	 */
 	public function get_product_type( $product_id ) {
 		$data = $this->get_product_row_from_db( $product_id );
-		return ! empty( $data['type'] ) ? $data['type'] : 'simple';
+		return ! empty( $data['type'] ) ? $data['type'] : false;
 	}
 
 	/**
@@ -627,6 +630,9 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 			'_purchase_note'     => 'purchase_note',
 			'_wc_rating_count'   => 'rating_counts',
 			'_wc_review_count'   => 'review_count',
+			'_download_limit'    => 'download_limit',
+			'_download_expiry'   => 'download_expiry',
+			'_thumbnail_id'      => 'image_id', // For compatibility with WordPress functions like has_post_thumbnail.
 		);
 
 		// Make sure to take extra data (like product url or text for external products) into account.
@@ -676,8 +682,6 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 	/**
 	 * Handle updated meta props after updating meta data.
 	 *
-	 * @todo can these checks and updates be moved elsewhere?
-	 *
 	 * @since  3.0.0
 	 * @param  WC_Product $product Product Object.
 	 */
@@ -692,7 +696,7 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 						'sale_price' => null,
 					),
 					array(
-						'product_id' => $product->get_id( 'edit' ),
+						'product_id' => $product->get_id(),
 					)
 				); // WPCS: db call ok, cache ok.
 				$product->set_sale_price( '' );
@@ -706,7 +710,7 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 						'price' => $product->get_sale_price( 'edit' ),
 					),
 					array(
-						'product_id' => $product->get_id( 'edit' ),
+						'product_id' => $product->get_id(),
 					)
 				); // WPCS: db call ok, cache ok.
 				$product->set_price( $product->get_sale_price( 'edit' ) );
@@ -717,7 +721,7 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 						'price' => $product->get_regular_price( 'edit' ),
 					),
 					array(
-						'product_id' => $product->get_id( 'edit' ),
+						'product_id' => $product->get_id(),
 					)
 				); // WPCS: db call ok, cache ok.
 				$product->set_price( $product->get_regular_price( 'edit' ) );
@@ -1190,8 +1194,7 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 		if ( $existing_downloads ) {
 			$downloads = array();
 			foreach ( $existing_downloads as $data ) {
-				// @todo Should delete downloads that does not have any name or file?
-				if ( empty( $data->name ) || empty( $data->file ) ) {
+				if ( empty( $data->file ) ) {
 					continue;
 				}
 
@@ -1199,8 +1202,6 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 				$download->set_id( $data->download_id );
 				$download->set_name( $data->name ? $data->name : wc_get_filename_from_url( $data->file ) );
 				$download->set_file( apply_filters( 'woocommerce_file_download_path', $data->file, $product, $data->download_id ) );
-				$download->set_limit( $data->limit );
-				$download->set_expiry( $data->expires );
 				$downloads[] = $download;
 			}
 
@@ -1241,8 +1242,6 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 						'product_id'  => $product->get_id(),
 						'name'        => $data['name'],
 						'file'        => $data['file'],
-						'limit'       => $data['limit'],
-						'expires'     => $data['expiry'],
 						'priority'    => $key,
 					);
 
@@ -1252,7 +1251,6 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 						array(
 							'%d',
 							'%d',
-							'%s',
 							'%s',
 							'%s',
 							'%d',
@@ -1333,16 +1331,25 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 	 */
 	public function read_attributes( &$product ) {
 		global $wpdb;
-		$product_attributes = $wpdb->get_results(
-			$wpdb->prepare(
-				"SELECT * FROM {$wpdb->prefix}wc_product_attributes WHERE product_id = %d",
-				$product->get_id()
-			)
-		); // WPCS: db call ok, cache ok.
+
+		$product_attributes = wp_cache_get( 'woocommerce_product_attributes_' . $product->get_id(), 'product' );
+
+		if ( false === $product_attributes ) {
+			$product_attributes = $wpdb->get_results(
+				$wpdb->prepare(
+					"SELECT * FROM {$wpdb->prefix}wc_product_attributes WHERE product_id = %d",
+					$product->get_id()
+				)
+			); // WPCS: db call ok, cache ok.
+
+			wp_cache_set( 'woocommerce_product_attributes_' . $product->get_id(), $product_attributes, 'product' );
+		}
 
 		if ( ! empty( $product_attributes ) ) {
-			$attributes = array();
-			$default_attributes = array();
+			$attributes             = array();
+			$default_attributes     = array();
+			$cached_attr_value_data = wp_cache_get( 'woocommerce_product_attribute_values_' . $product->get_id(), 'product' );
+
 			foreach ( $product_attributes as $attr ) {
 				$attribute = new WC_Product_Attribute();
 				$attribute->set_attribute_id( $attr->attribute_id ); // This is the attribute taxonomy ID, or 0 for local attributes.
@@ -1352,14 +1359,23 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 				$attribute->set_visible( $attr->is_visible );
 				$attribute->set_variation( $attr->is_variation );
 
-				$attr_value_data = $wpdb->get_results(
-					$wpdb->prepare(
-						"SELECT value, is_default FROM {$wpdb->prefix}wc_product_attribute_values WHERE product_attribute_id = %d",
-						$attr->product_attribute_id
-					)
-				);
+				if ( ! isset( $cached_attr_value_data[ $attr->product_attribute_id ] ) ) {
+					$cached_attr_value_data[ $attr->product_attribute_id ] = $wpdb->get_results(
+						$wpdb->prepare(
+							"SELECT value, is_default FROM {$wpdb->prefix}wc_product_attribute_values WHERE product_attribute_id = %d",
+							$attr->product_attribute_id
+						)
+					);
+				}
 
-				$attr_values = array_filter( wp_list_pluck( $attr_value_data, 'value' ) );
+				$attr_value_data = $cached_attr_value_data[ $attr->product_attribute_id ];
+				$attr_values     = wp_list_pluck( $attr_value_data, 'value' );
+
+				// If this is a taxonomy, we're reading numeric term IDs.
+				if ( $attr->attribute_id ) {
+					$attr_values = array_map( 'absint', $attr_values );
+				}
+
 				$attribute->set_options( $attr_values );
 
 				$attributes[] = $attribute;
@@ -1370,6 +1386,9 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 					}
 				}
 			}
+
+			wp_cache_set( 'woocommerce_product_attribute_values_' . $product->get_id(), $cached_attr_value_data, 'product' );
+
 			$product->set_attributes( $attributes );
 			$product->set_default_attributes( $default_attributes );
 		}
@@ -1468,7 +1487,7 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 				$wpdb->get_results(
 					$wpdb->prepare(
 						"SELECT product_attribute_id, attribute_id FROM {$wpdb->prefix}wc_product_attributes WHERE product_id = %d",
-						$product->get_id( 'edit' )
+						$product->get_id()
 					)
 				), 'attribute_id', 'product_attribute_id'
 			); // WPCS: db call ok, cache ok.
@@ -1488,7 +1507,7 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 
 					$product_attribute_id = $attribute->get_product_attribute_id();
 					$attribute_data       = array(
-						'product_id'   => $product->get_id( 'edit' ),
+						'product_id'   => $product->get_id(),
 						'name'         => $attribute->get_name(),
 						'is_visible'   => $attribute->get_visible() ? 1 : 0,
 						'is_variation' => $attribute->get_variation() ? 1 : 0,
@@ -1809,33 +1828,37 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 			'price',
 			'regular_price',
 			'sale_price',
-			'date_on_sale_from',
-			'date_on_sale_to',
 		);
-		foreach ( $product_table_queries as $product_table_query ) {
-			if ( isset( $query_vars[ $product_table_query ] ) && '' !== $query_vars[ $product_table_query ] ) {
+		foreach ( $product_table_queries as $column_name ) {
+			if ( isset( $query_vars[ $column_name ] ) && '' !== $query_vars[ $column_name ] ) {
 				$query = array(
-					'value'   => $query_vars[ $product_table_query ],
+					'value'   => $query_vars[ $column_name ],
 					'format'  => '%s',
-					'compare' => is_array( $query_vars[ $product_table_query ] ) ? 'IN' : '=',
+					'compare' => is_array( $query_vars[ $column_name ] ) ? 'IN' : '=',
 				);
-				switch ( $product_table_query ) {
+				switch ( $column_name ) {
 					case 'virtual':
 					case 'downloadable':
-						$query['value']  = $query_vars[ $product_table_query ] ? 1 : 0;
+						$query['value']  = $query_vars[ $column_name ] ? 1 : 0;
 						$query['format'] = '%d';
-						break;
-					case 'date_on_sale_from':
-					case 'date_on_sale_to':
-						$query['value'] = $this->parse_date_for_wp_query( $query_vars[ $product_table_query ], $product_table_query, $wp_query_args );
 						break;
 					case 'sku':
 						$query['compare'] = 'LIKE';
 						break;
 				}
-				$wp_query_args['wc_products_query'][ $product_table_query ] = $query;
-				unset( $wp_query_args[ $product_table_query ] );
+				$wp_query_args['wc_products_query'][ $column_name ] = $query;
+				unset( $wp_query_args[ $column_name ] );
 			}
+		}
+
+		if ( isset( $query_vars['date_on_sale_from'] ) && '' !== $query_vars['date_on_sale_from'] ) {
+			$wp_query_args = $this->parse_date_for_wp_query( $query_vars['date_on_sale_from'], 'date_on_sale_from', $wp_query_args );
+			unset( $wp_query_args['date_on_sale_from'] );
+		}
+
+		if ( isset( $query_vars['date_on_sale_to'] ) && '' !== $query_vars['date_on_sale_to'] ) {
+			$wp_query_args = $this->parse_date_for_wp_query( $query_vars['date_on_sale_to'], 'date_on_sale_to', $wp_query_args );
+			unset( $wp_query_args['date_on_sale_to'] );
 		}
 
 		// Handle product types.
@@ -1971,6 +1994,174 @@ class WC_Product_Data_Store_Custom_Table extends WC_Data_Store_WP implements WC_
 		}
 
 		return apply_filters( 'woocommerce_product_data_store_cpt_get_products_query', $wp_query_args, $query_vars, $this );
+	}
+
+	/**
+	 * Map a valid date query var to WP_Query arguments.
+	 * Valid date formats: YYYY-MM-DD or timestamp, possibly combined with an operator from $valid_operators.
+	 * Also accepts a WC_DateTime object.
+	 *
+	 * @since 3.2.0
+	 * @param mixed  $query_var A valid date format.
+	 * @param string $key meta or db column key.
+	 * @param array  $wp_query_args WP_Query args.
+	 * @return array Modified $wp_query_args
+	 */
+	public function parse_date_for_wp_query( $query_var, $key, $wp_query_args = array() ) {
+		$query_parse_regex = '/([^.<>]*)(>=|<=|>|<|\.\.\.)([^.<>]+)/';
+		$valid_operators   = array( '>', '>=', '=', '<=', '<', '...' );
+
+		// YYYY-MM-DD queries have 'day' precision. Timestamp/WC_DateTime queries have 'second' precision.
+		$precision = 'second';
+
+		$dates    = array();
+		$operator = '=';
+
+		try {
+			// Specific time query with a WC_DateTime.
+			if ( is_a( $query_var, 'WC_DateTime' ) ) {
+				$dates[] = $query_var;
+			} elseif ( is_numeric( $query_var ) ) { // Specific time query with a timestamp.
+				$dates[] = new WC_DateTime( "@{$query_var}", new DateTimeZone( 'UTC' ) );
+			} elseif ( preg_match( $query_parse_regex, $query_var, $sections ) ) { // Query with operators and possible range of dates.
+				if ( ! empty( $sections[1] ) ) {
+					$dates[] = is_numeric( $sections[1] ) ? new WC_DateTime( "@{$sections[1]}", new DateTimeZone( 'UTC' ) ) : wc_string_to_datetime( $sections[1] );
+				}
+
+				$operator = in_array( $sections[2], $valid_operators, true ) ? $sections[2] : '';
+				$dates[]  = is_numeric( $sections[3] ) ? new WC_DateTime( "@{$sections[3]}", new DateTimeZone( 'UTC' ) ) : wc_string_to_datetime( $sections[3] );
+
+				if ( ! is_numeric( $sections[1] ) && ! is_numeric( $sections[3] ) ) {
+					$precision = 'day';
+				}
+			} else { // Specific time query with a string.
+				$dates[]   = wc_string_to_datetime( $query_var );
+				$precision = 'day';
+			}
+		} catch ( Exception $e ) {
+			return $wp_query_args;
+		}
+
+		// Check for valid inputs.
+		if ( ! $operator || empty( $dates ) || ( '...' === $operator && count( $dates ) < 2 ) ) {
+			return $wp_query_args;
+		}
+
+		// Build date query for 'post_date' or 'post_modified' keys.
+		if ( in_array( $key, array( 'post_date', 'post_modified', 'date_on_sale_from', 'date_on_sale_to' ), true ) ) {
+			if ( ! isset( $wp_query_args['date_query'] ) ) {
+				$wp_query_args['date_query'] = array();
+			}
+
+			$query_arg = array(
+				'column'    => 'day' === $precision ? $key : $key . '_gmt',
+				'inclusive' => '>' !== $operator && '<' !== $operator,
+			);
+
+			// Add 'before'/'after' query args.
+			$comparisons = array();
+			if ( '>' === $operator || '>=' === $operator || '...' === $operator ) {
+				$comparisons[] = 'after';
+			}
+			if ( '<' === $operator || '<=' === $operator || '...' === $operator ) {
+				$comparisons[] = 'before';
+			}
+
+			foreach ( $comparisons as $index => $comparison ) {
+				if ( 'day' === $precision ) {
+					/**
+					 * WordPress doesn't generate the correct SQL for inclusive day queries with both a 'before' and
+					 * 'after' string query, so we have to use the array format in 'day' precision.
+					 *
+					 * @see https://core.trac.wordpress.org/ticket/29908
+					 */
+					$query_arg[ $comparison ]['year']  = $dates[ $index ]->date( 'Y' );
+					$query_arg[ $comparison ]['month'] = $dates[ $index ]->date( 'n' );
+					$query_arg[ $comparison ]['day']   = $dates[ $index ]->date( 'j' );
+				} else {
+					/**
+					 * WordPress doesn't support 'hour'/'second'/'minute' in array format 'before'/'after' queries,
+					 * so we have to use a string query.
+					 */
+					$query_arg[ $comparison ] = gmdate( 'm/d/Y H:i:s', $dates[ $index ]->getTimestamp() );
+				}
+			}
+
+			if ( empty( $comparisons ) ) {
+				$query_arg['year']  = $dates[0]->date( 'Y' );
+				$query_arg['month'] = $dates[0]->date( 'n' );
+				$query_arg['day']   = $dates[0]->date( 'j' );
+				if ( 'second' === $precision ) {
+					$query_arg['hour']   = $dates[0]->date( 'H' );
+					$query_arg['minute'] = $dates[0]->date( 'i' );
+					$query_arg['second'] = $dates[0]->date( 's' );
+				}
+			}
+			$wp_query_args['date_query'][] = $query_arg;
+			return $wp_query_args;
+		}
+
+		// Build meta query for unrecognized keys.
+		if ( ! isset( $wp_query_args['meta_query'] ) ) {
+			$wp_query_args['meta_query'] = array(); // phpcs:ignore WordPress.VIP.SlowDBQuery.slow_db_query_meta_query
+		}
+
+		// Meta dates are stored as timestamps in the db.
+		// Check against beginning/end-of-day timestamps when using 'day' precision.
+		if ( 'day' === $precision ) {
+			$start_timestamp = strtotime( gmdate( 'm/d/Y 00:00:00', $dates[0]->getTimestamp() ) );
+			$end_timestamp   = '...' !== $operator ? ( $start_timestamp + DAY_IN_SECONDS ) : strtotime( gmdate( 'm/d/Y 00:00:00', $dates[1]->getTimestamp() ) );
+			switch ( $operator ) {
+				case '>':
+				case '<=':
+					$wp_query_args['meta_query'][] = array(
+						'key'     => $key,
+						'value'   => $end_timestamp,
+						'compare' => $operator,
+					);
+					break;
+				case '<':
+				case '>=':
+					$wp_query_args['meta_query'][] = array(
+						'key'     => $key,
+						'value'   => $start_timestamp,
+						'compare' => $operator,
+					);
+					break;
+				default:
+					$wp_query_args['meta_query'][] = array(
+						'key'     => $key,
+						'value'   => $start_timestamp,
+						'compare' => '>=',
+					);
+					$wp_query_args['meta_query'][] = array(
+						'key'     => $key,
+						'value'   => $end_timestamp,
+						'compare' => '<=',
+					);
+			}
+		} else {
+			if ( '...' !== $operator ) {
+				$wp_query_args['meta_query'][] = array(
+					'key'     => $key,
+					'value'   => $dates[0]->getTimestamp(),
+					'compare' => $operator,
+				);
+			} else {
+				$wp_query_args['meta_query'][] = array(
+					'key'     => $key,
+					'value'   => $dates[0]->getTimestamp(),
+					'compare' => '>=',
+				);
+				$wp_query_args['meta_query'][] = array(
+					'key'     => $key,
+					'value'   => $dates[1]->getTimestamp(),
+					'compare' => '<=',
+				);
+			}
+		}
+
+		return $wp_query_args;
 	}
 
 	/**

@@ -13,6 +13,15 @@
 class WC_Tests_Backwards_Compatibility extends WC_Unit_Test_Case {
 
 	/**
+	 * Setup.
+	 */
+	public function setUp() {
+		if ( defined( 'WC_PRODUCT_TABLES_DISABLE_BW_COMPAT' ) ) {
+			$this->markTestSkipped( 'all tests in this file are invactive for this configuration!' );
+		}
+	}
+
+	/**
 	 * Get meta values directly from the postmeta table.
 	 *
 	 * @since 1.0.0
@@ -761,52 +770,96 @@ class WC_Tests_Backwards_Compatibility extends WC_Unit_Test_Case {
 	}
 
 	/**
-	 * Test the download limit metadata mapping.
+	 * Test downloads files metadata mapping.
 	 *
 	 * @since 1.0.0
 	 */
-
-	/*
-	@todo Need to figure out how we're handling backwards compatibility for these since products have multiple download limits and expiries now.
-	public function test_download_limit_mapping() {
+	public function test_downloadable_files_mapping() {
 		$product = new WC_Product_Simple();
 		$product->set_downloadable( true );
 		$product->set_downloads( array(
 			array(
-				'name' => 'Test download',
-				'file' => 'https://woocommerce.com',
-				'limit' => 5,
+				'name'   => 'Test download',
+				'file'   => 'https://woocommerce.com',
+				'limit'  => '',
+				'expiry' => '',
+			),
+			array(
+				'name'   => 'Test download 2',
+				'file'   => 'https://woocommerce.com/2',
+				'limit'  => '',
 				'expiry' => '',
 			),
 		) );
 		$product->save();
 
-		$this->assertEquals( array(), $this->get_from_meta_table( $product->get_id(), '_download_limit' ) );
-		$this->assertEquals( 5, get_post_meta( $product->get_id(), '_download_limit', true ) );
+		$this->assertEquals( array(), $this->get_from_meta_table( $product->get_id(), '_downloadable_files' ) );
 
-		update_post_meta( $product->get_id(), '_download_limit', 10 );
+		$results = array_values( get_post_meta( $product->get_id(), '_downloadable_files', true ) );
+		$this->assertEquals( 'Test download', $results[0]['name'] );
+		$this->assertEquals( 'https://woocommerce.com', $results[0]['file'] );
+		$this->assertEquals( 'Test download 2', $results[1]['name'] );
+		$this->assertEquals( 'https://woocommerce.com/2', $results[1]['file'] );
 
-		$this->assertEquals( array(), $this->get_from_meta_table( $product->get_id(), '_download_limit' ) );
-		$this->assertEquals( 10, get_post_meta( $product->get_id(), '_download_limit', true ) );
+		update_post_meta( $product->get_id(), '_downloadable_files', array(
+			array(
+				'name'   => 'Test download 3',
+				'file'   => 'https://woocommerce.com/3',
+				'limit'  => '',
+				'expiry' => '',
+			),
+			array(
+				'name'   => 'Test download 4',
+				'file'   => 'https://woocommerce.com/4',
+				'limit'  => '',
+				'expiry' => '',
+			),
+		) );
 
-		// @todo Instantiate a product object and check it got updated should pass.
-		delete_post_meta( $product->get_id(), '_download_limit' );
-		$this->assertEquals( -1, get_post_meta( $product->get_id(), '_download_limit', true ) );
+		$this->assertEquals( array(), $this->get_from_meta_table( $product->get_id(), '_downloadable_files' ) );
 
-		add_post_meta( $product->get_id(), '_download_limit', 3 );
+		$results = array_values( get_post_meta( $product->get_id(), '_downloadable_files', true ) );
+		$this->assertEquals( 'Test download 3', $results[0]['name'] );
+		$this->assertEquals( 'https://woocommerce.com/3', $results[0]['file'] );
+		$this->assertEquals( 'Test download 4', $results[1]['name'] );
+		$this->assertEquals( 'https://woocommerce.com/4', $results[1]['file'] );
 
-		$this->assertEquals( array(), $this->get_from_meta_table( $product->get_id(), '_download_limit' ) );
-		$this->assertEquals( 3, get_post_meta( $product->get_id(), '_download_limit', true ) );
+		$_product = wc_get_product( $product->get_id() );
+		$results  = array_values( $_product->get_downloads() );
+		$this->assertEquals( 'Test download 3', $results[0]['name'] );
+		$this->assertEquals( 'https://woocommerce.com/3', $results[0]['file'] );
+		$this->assertEquals( 'Test download 4', $results[1]['name'] );
+		$this->assertEquals( 'https://woocommerce.com/4', $results[1]['file'] );
+
+		delete_post_meta( $product->get_id(), '_downloadable_files' );
+		$this->assertEquals( array(), get_post_meta( $product->get_id(), '_downloadable_files', true ) );
+
+		$_product = wc_get_product( $product->get_id() );
+		$this->assertEquals( array(), $_product->get_downloads() );
+
+		add_post_meta( $product->get_id(), '_downloadable_files', array(
+			array(
+				'name'   => 'Test download 3',
+				'file'   => 'https://woocommerce.com/3',
+				'limit'  => '',
+				'expiry' => '',
+			),
+			array(
+				'name'   => 'Test download 4',
+				'file'   => 'https://woocommerce.com/4',
+				'limit'  => '',
+				'expiry' => '',
+			),
+		) );
+
+		$this->assertEquals( array(), $this->get_from_meta_table( $product->get_id(), '_downloadable_files' ) );
+
+		$results = array_values( get_post_meta( $product->get_id(), '_downloadable_files', true ) );
+		$this->assertEquals( 'Test download 3', $results[0]['name'] );
+		$this->assertEquals( 'https://woocommerce.com/3', $results[0]['file'] );
+		$this->assertEquals( 'Test download 4', $results[1]['name'] );
+		$this->assertEquals( 'https://woocommerce.com/4', $results[1]['file'] );
 	}
-
-	public function test_download_expiry() {
-
-	}
-
-	public function test_downloadable_files_mapping() {
-
-	}
-	*/
 
 	/**
 	 * Test the variation description metadata mapping.
@@ -923,7 +976,7 @@ class WC_Tests_Backwards_Compatibility extends WC_Unit_Test_Case {
 		$this->assertEquals( array(), $this->get_from_meta_table( $product->get_id(), '_product_attributes' ) );
 		$this->assertEquals( $updated, get_post_meta( $product->get_id(), '_product_attributes', true ) );
 
-		$_product = wc_get_product( $product->get_id() );
+		$_product            = wc_get_product( $product->get_id() );
 		$retrieved_attribute = current( $_product->get_attributes() );
 		$this->assertEquals( 1, count( $_product->get_attributes() ) );
 		$this->assertEquals( 'Test Attribute 2', $retrieved_attribute->get_name() );
@@ -942,7 +995,6 @@ class WC_Tests_Backwards_Compatibility extends WC_Unit_Test_Case {
 	 * Test the default attribute metadata mapping.
 	 *
 	 * @since 1.0.0
-	 * @todo This fails currently. Something to do with caching in the data store.
 	 */
 	public function test_product_default_attributes_mapping() {
 		$attributes = array();
